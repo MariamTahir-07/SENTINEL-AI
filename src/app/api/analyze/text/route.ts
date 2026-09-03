@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { textAnalysisSchema } from "@/lib/validation";
 import { analyzeTextThreat, isAIConfigured } from "@/lib/ai/provider";
 import { createApiErrorResponse, Errors } from "@/lib/errors";
+import { createClient } from "@/lib/auth/server";
+import { saveScanHistory } from "@/lib/history";
 
 export async function POST(request: NextRequest) {
   try {
@@ -19,6 +21,13 @@ export async function POST(request: NextRequest) {
     }
 
     const result = await analyzeTextThreat(validation.data.text, validation.data.context);
+
+    // Save to history (fire-and-forget)
+    try {
+      const supabase = await createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) await saveScanHistory(user.id, "message", result);
+    } catch { /* non-fatal */ }
 
     return NextResponse.json({ result });
   } catch (error) {

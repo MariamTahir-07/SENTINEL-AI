@@ -131,8 +131,10 @@ export default function QRPage() {
             </div>
           </div>
 
-          {result.urlAnalysis && (
+          {result.urlAnalysis ? (
             <AnalysisResult result={result.urlAnalysis} />
+          ) : (
+            <AnalysisResult result={result} />
           )}
         </div>
       )}

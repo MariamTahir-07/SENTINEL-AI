@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { transcribeAudio, analyzeVoiceThreat, isAIConfigured } from "@/lib/ai/provider";
 import { createApiErrorResponse, Errors } from "@/lib/errors";
+import { createClient } from "@/lib/auth/server";
+import { saveScanHistory } from "@/lib/history";
 import type { VoiceAnalysisResult } from "@/types";
 
 export async function POST(request: NextRequest) {
@@ -40,6 +42,13 @@ export async function POST(request: NextRequest) {
       transcript,
       duration,
     };
+
+    // Save to history (fire-and-forget)
+    try {
+      const supabase = await createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) await saveScanHistory(user.id, "voice", result);
+    } catch { /* non-fatal */ }
 
     return NextResponse.json({ result });
   } catch (error) {

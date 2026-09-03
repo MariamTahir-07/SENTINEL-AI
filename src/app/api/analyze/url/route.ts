@@ -4,6 +4,8 @@ import { validateUrl, analyzeUrlPatterns } from "@/lib/security";
 import { analyzeTextThreat, isAIConfigured } from "@/lib/ai/provider";
 import { classifyRisk, computeRiskScore } from "@/lib/risk";
 import { createApiErrorResponse, Errors } from "@/lib/errors";
+import { createClient } from "@/lib/auth/server";
+import { saveScanHistory } from "@/lib/history";
 import type { URLAnalysisResult, RiskLevel } from "@/types";
 
 export async function POST(request: NextRequest) {
@@ -60,6 +62,13 @@ export async function POST(request: NextRequest) {
       confidence: aiAnalysis?.confidence ?? (signals.length > 0 ? 70 : 50),
       detectedLanguage: "en",
     };
+
+    // Save to history (fire-and-forget)
+    try {
+      const supabase = await createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) await saveScanHistory(user.id, "url", result);
+    } catch { /* non-fatal */ }
 
     return NextResponse.json({ result });
   } catch (error) {

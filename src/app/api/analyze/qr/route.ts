@@ -5,7 +5,9 @@ import { validateUrl, analyzeUrlPatterns } from "@/lib/security";
 import { analyzeTextThreat, isAIConfigured } from "@/lib/ai/provider";
 import { classifyRisk, computeRiskScore } from "@/lib/risk";
 import { createApiErrorResponse, Errors } from "@/lib/errors";
-import type { QRAnalysisResult, URLAnalysisResult, RiskLevel } from "@/types";
+import { createClient } from "@/lib/auth/server";
+import { saveScanHistory } from "@/lib/history";
+import type { QRAnalysisResult, URLAnalysisResult, ThreatAnalysisResult, RiskLevel } from "@/types";
 
 export async function POST(request: NextRequest) {
   try {
@@ -47,14 +49,17 @@ export async function POST(request: NextRequest) {
     try {
       parsedUrl = validateUrl(decodedUrl);
     } catch {
-      // URL is invalid but we still report it
+      // URL is invalid — we'll still run AI analysis on the raw content
     }
 
     let urlAnalysis: URLAnalysisResult | null = null;
+    let baseAnalysis: ThreatAnalysisResult;
+
     if (parsedUrl) {
+      // Valid HTTP/HTTPS URL — pattern-based + AI analysis
       const { suspiciousPatterns, signals } = analyzeUrlPatterns(parsedUrl);
 
-      let aiAnalysis = null;
+      let aiAnalysis: ThreatAnalysisResult | null = null;
       if (isAIConfigured()) {
         try {
           aiAnalysis = await analyzeTextThreat(
@@ -86,20 +91,52 @@ export async function POST(request: NextRequest) {
         confidence: aiAnalysis?.confidence ?? 60,
         detectedLanguage: "en",
       };
+
+      baseAnalysis = urlAnalysis;
+    } else {
+      // Not a valid URL (plain text, tel:, mailto:, etc.) — AI-analyze the raw content
+      if (isAIConfigured()) {
+        try {
+          baseAnalysis = await analyzeTextThreat(
+            `Analyze this QR code content for safety threats. It is NOT a valid HTTP/HTTPS URL. Raw content: "${decodedUrl}"`,
+            "general"
+          );
+        } catch {
+          baseAnalysis = {
+            riskScore: 50, riskLevel: "suspicious", threatTypes: ["QR Code"],
+            signals: [{ name: "Non-URL Content", severity: "medium", explanation: "The QR code contains content that is not a standard web URL. Exercise caution." }],
+            explanation: ["QR code decoded but the content is not a standard web URL. Verify the source before trusting this content."],
+            recommendedActions: ["Do not act on this content without verifying the source.", "If this QR code was unexpected, do not follow its instructions."],
+            confidence: 50, detectedLanguage: "en",
+          };
+        }
+      } else {
+        baseAnalysis = {
+          riskScore: 50, riskLevel: "suspicious", threatTypes: ["QR Code"],
+          signals: [{ name: "Non-URL Content", severity: "medium", explanation: "The QR code contains content that is not a standard web URL. Exercise caution." }],
+          explanation: ["QR code decoded but the content is not a standard web URL. Verify the source before trusting this content."],
+          recommendedActions: ["Do not act on this content without verifying the source.", "If this QR code was unexpected, do not follow its instructions."],
+          confidence: 50, detectedLanguage: "en",
+        };
+      }
     }
 
     const result: QRAnalysisResult = {
+      ...baseAnalysis,
       decodedUrl,
       urlAnalysis,
-      riskScore: urlAnalysis?.riskScore ?? 50,
-      riskLevel: urlAnalysis?.riskLevel ?? "suspicious",
-      threatTypes: urlAnalysis?.threatTypes ?? ["QR Code"],
-      signals: urlAnalysis?.signals ?? [],
-      explanation: urlAnalysis?.explanation ?? ["QR code decoded. Verify the destination URL before visiting."],
-      recommendedActions: ["Do not visit the URL without verifying it.", "Check if you trust the source of the QR code."],
-      confidence: urlAnalysis?.confidence ?? 50,
-      detectedLanguage: "en",
     };
+
+    // Save to history (fire-and-forget — never blocks the response)
+    try {
+      const supabase = await createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        await saveScanHistory(user.id, "qr", result);
+      }
+    } catch {
+      // History save failure is non-fatal
+    }
 
     return NextResponse.json({ result });
   } catch (error) {

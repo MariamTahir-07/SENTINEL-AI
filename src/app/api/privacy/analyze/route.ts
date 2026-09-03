@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createApiErrorResponse, Errors } from "@/lib/errors";
 import { validateUrl } from "@/lib/security";
+import { createClient } from "@/lib/auth/server";
+import { saveScanHistory } from "@/lib/history";
 import type { PrivacyAnalysisResult, CookieCategory, RiskLevel } from "@/types";
 
 // Known tracker/advertising cookie domain patterns
@@ -189,6 +191,13 @@ export async function POST(request: NextRequest) {
       categories,
       recommendations,
     };
+
+    // Save to history (fire-and-forget)
+    try {
+      const supabase = await createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) await saveScanHistory(user.id, "privacy", result);
+    } catch { /* non-fatal */ }
 
     return NextResponse.json({ result });
   } catch (error) {
