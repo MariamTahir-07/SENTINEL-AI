@@ -6,36 +6,52 @@ import { createClient } from "@/lib/auth/server";
 import { getRiskBadgeClasses, getRiskLabel } from "@/lib/risk";
 import type { ScanType, RiskLevel } from "@/types";
 
-async function getScans(userId: string) {
-  const supabase = await createClient();
-
-  const { data: scans, error } = await supabase
-    .from("scans")
-    .select(`
-      id,
-      type,
-      status,
-      created_at,
-      threat_results (
-        risk_score,
-        risk_level,
-        confidence,
-        summary
-      )
-    `)
-    .eq("user_id", userId)
-    .order("created_at", { ascending: false })
-    .limit(50);
-
-  if (error) {
-    console.error("[history] Failed to fetch scans:", error.message);
-    return [];
-  }
-
-  return scans ?? [];
+interface ScanRow {
+  id: string;
+  type: string;
+  status: string;
+  created_at: string;
+  threat_results:
+    | { risk_score: number; risk_level: string; confidence: number | null; summary: string | null }[]
+    | { risk_score: number; risk_level: string; confidence: number | null; summary: string | null }
+    | null;
 }
 
-const SCAN_ICONS: Record<ScanType, typeof MessageSquare> = {
+async function getScans(userId: string): Promise<ScanRow[]> {
+  try {
+    const supabase = await createClient();
+
+    const { data: scans, error } = await supabase
+      .from("scans")
+      .select(`
+        id,
+        type,
+        status,
+        created_at,
+        threat_results (
+          risk_score,
+          risk_level,
+          confidence,
+          summary
+        )
+      `)
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(50);
+
+    if (error) {
+      console.error("[history] Supabase query error:", error.message);
+      return [];
+    }
+
+    return (scans ?? []) as ScanRow[];
+  } catch (err) {
+    console.error("[history] Unexpected error fetching scans:", err);
+    return [];
+  }
+}
+
+const SCAN_ICONS: Record<string, typeof MessageSquare> = {
   message: MessageSquare,
   url: Link2,
   qr: QrCode,
@@ -43,7 +59,7 @@ const SCAN_ICONS: Record<ScanType, typeof MessageSquare> = {
   privacy: Cookie,
 };
 
-const SCAN_LABELS: Record<ScanType, string> = {
+const SCAN_LABELS: Record<string, string> = {
   message: "Message",
   url: "URL",
   qr: "QR Code",
@@ -61,7 +77,7 @@ export default async function HistoryPage() {
     t("filterMessage"), t("filterUrl"), t("filterQr"), t("filterVoice"),
   ];
 
-  let scans: Awaited<ReturnType<typeof getScans>> = [];
+  let scans: ScanRow[] = [];
   if (user) {
     scans = await getScans(user.id);
   }
@@ -96,14 +112,26 @@ export default async function HistoryPage() {
       {scans.length > 0 ? (
         <div className="space-y-3">
           {scans.map((scan) => {
-            const Icon = SCAN_ICONS[scan.type as ScanType] ?? Scan;
-            const threat = Array.isArray(scan.threat_results)
-              ? scan.threat_results[0]
-              : scan.threat_results;
+            const Icon = SCAN_ICONS[scan.type] ?? Scan;
+
+            // Supabase returns joined relations as arrays
+            const threatArr = Array.isArray(scan.threat_results)
+              ? scan.threat_results
+              : scan.threat_results
+              ? [scan.threat_results]
+              : [];
+            const threat = threatArr[0];
+
             const riskLevel = (threat?.risk_level ?? "safe") as RiskLevel;
             const riskScore = threat?.risk_score ?? 0;
             const summary = threat?.summary ?? "";
-            const date = new Date(scan.created_at).toLocaleString();
+
+            let dateStr = "";
+            try {
+              dateStr = new Date(scan.created_at).toLocaleString();
+            } catch {
+              dateStr = scan.created_at;
+            }
 
             return (
               <div
@@ -136,16 +164,16 @@ export default async function HistoryPage() {
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="flex items-center gap-1.5 text-sm font-medium text-text-primary">
                       <Icon size={14} className="text-text-muted" />
-                      {SCAN_LABELS[scan.type as ScanType] ?? scan.type}
+                      {SCAN_LABELS[scan.type] ?? scan.type}
                     </span>
                     <span className={`sentinel-badge text-xs ${getRiskBadgeClasses(riskLevel)}`}>
-                      {getRiskLabel(riskLevel)} — {riskScore}/100
+                      {getRiskLabel(riskLevel)} &mdash; {riskScore}/100
                     </span>
                   </div>
                   {summary && (
                     <p className="text-sm text-text-secondary mt-1 line-clamp-2">{summary}</p>
                   )}
-                  <p className="text-xs text-text-muted mt-1.5">{date}</p>
+                  <p className="text-xs text-text-muted mt-1.5">{dateStr}</p>
                 </div>
               </div>
             );

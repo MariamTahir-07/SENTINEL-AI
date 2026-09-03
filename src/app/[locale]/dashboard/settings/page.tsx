@@ -1,5 +1,7 @@
 "use client";
 
+import { useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { Settings, User, Globe, Shield, Lock } from "lucide-react";
 import { localeNames } from "@/i18n/routing";
@@ -7,8 +9,24 @@ import { localeNames } from "@/i18n/routing";
 export default function SettingsPage() {
   const t = useTranslations("settings");
   const tc = useTranslations("common");
+  const pathname = usePathname();
+  const router = useRouter();
+
+  // Extract current locale from the URL path (e.g. /en/dashboard/settings → en)
+  const segments = pathname.split("/");
+  const currentLocale = segments[1] || "en";
+
+  const [uiLang, setUiLang] = useState(currentLocale);
+  const [analysisLang, setAnalysisLang] = useState("auto");
 
   const languages = Object.entries(localeNames);
+
+  function handleLocaleChange(newLocale: string) {
+    setUiLang(newLocale);
+    // Replace the locale segment in the URL and navigate
+    const newPath = "/" + segments.slice(2).join("/");
+    router.push(`/${newLocale}${newPath}`);
+  }
 
   return (
     <div className="mx-auto max-w-3xl space-y-8">
@@ -46,7 +64,11 @@ export default function SettingsPage() {
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
             <label className="block text-sm text-text-secondary mb-1.5">{t("uiLanguage")}</label>
-            <select className="sentinel-input">
+            <select
+              className="sentinel-input"
+              value={uiLang}
+              onChange={(e) => handleLocaleChange(e.target.value)}
+            >
               {languages.map(([code, name]) => (
                 <option key={code} value={code}>{name}</option>
               ))}
@@ -54,7 +76,11 @@ export default function SettingsPage() {
           </div>
           <div>
             <label className="block text-sm text-text-secondary mb-1.5">{t("analysisLanguage")}</label>
-            <select className="sentinel-input">
+            <select
+              className="sentinel-input"
+              value={analysisLang}
+              onChange={(e) => setAnalysisLang(e.target.value)}
+            >
               <option value="auto">{t("autoDetect")}</option>
               {languages.map(([code, name]) => (
                 <option key={code} value={code}>{name}</option>
