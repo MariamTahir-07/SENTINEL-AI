@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import sharp from "sharp";
 import jsQR from "jsqr";
 import { validateUrl, analyzeUrlPatterns } from "@/lib/security";
 import { analyzeTextThreat, isAIConfigured } from "@/lib/ai/provider";
@@ -24,35 +25,24 @@ export async function POST(request: NextRequest) {
       throw Errors.file("Only PNG, JPEG, WebP, and GIF images are supported.");
     }
 
-    // Convert to buffer and decode QR
-    const buffer = await imageFile.arrayBuffer();
-    const uint8 = new Uint8Array(buffer);
+    // Step 1: Decode image to raw RGBA pixel data using sharp
+    const buffer = Buffer.from(await imageFile.arrayBuffer());
+    const { data: pixels, info } = await sharp(buffer)
+      .ensureAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
 
-    // Use jsQR with raw pixel data - we need to convert the image to RGBA
-    // For simplicity, we'll try to decode the raw buffer
-    // jsQR expects Uint8ClampedArray of RGBA data
-    // We'll need to use a canvas-like approach or handle common formats
+    // Step 2: Decode QR code from RGBA pixel data
+    const uint8Clamped = new Uint8ClampedArray(pixels.buffer, pixels.byteOffset, pixels.byteLength);
+    const qrResult = jsQR(uint8Clamped, info.width, info.height);
 
-    // Simple approach: try to find QR in the raw data
-    // In production, you'd use sharp or a similar library to decode the image first
-    let decodedUrl: string | null = null;
-
-    try {
-      // Try to decode as if it's raw RGBA data (for testing purposes)
-      // In a real app, you'd use sharp/canvas to convert the image to RGBA first
-      const result = jsQR(uint8 as unknown as Uint8ClampedArray, 1, uint8.length / 4);
-      if (result?.data) {
-        decodedUrl = result.data;
-      }
-    } catch {
-      // QR decode from raw buffer failed
-    }
-
-    if (!decodedUrl) {
+    if (!qrResult?.data) {
       throw Errors.qrDecode("Could not decode QR code from the provided image. Ensure the image contains a clear QR code.");
     }
 
-    // Validate the decoded URL
+    const decodedUrl = qrResult.data;
+
+    // Step 3: Validate and analyze the decoded URL
     let parsedUrl: URL | null = null;
     try {
       parsedUrl = validateUrl(decodedUrl);
@@ -72,7 +62,7 @@ export async function POST(request: NextRequest) {
             "general"
           );
         } catch {
-          // Continue with pattern-based only
+          // Continue with pattern-based analysis only
         }
       }
 

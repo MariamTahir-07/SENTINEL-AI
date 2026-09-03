@@ -16,6 +16,8 @@ function getClient(): Groq {
   return groqClient;
 }
 
+const AI_MODEL = process.env.GROQ_MODEL || "groq/compound";
+
 const aiResponseSchema = z.object({
   riskScore: z.number().min(0).max(100),
   threatTypes: z.array(z.string()),
@@ -63,22 +65,46 @@ ${text}
 Provide your threat analysis as JSON.`;
 }
 
+function wrapGroqError(error: unknown): never {
+  if (error instanceof Groq.APIError) {
+    if (error.status === 401 || error.status === 403) {
+      throw Errors.aiProvider("AI service authentication failed. Check your GROQ_API_KEY.");
+    }
+    if (error.status === 429) {
+      throw Errors.rateLimit("AI service rate limit exceeded. Please wait a moment and try again.");
+    }
+    if (error.status === 404) {
+      const body = error.error as { code?: string } | undefined;
+      if (body?.code === "model_not_found" || body?.code === "model_decommissioned") {
+        throw Errors.aiProvider(`AI model '${AI_MODEL}' is not available. Set GROQ_MODEL env var to a valid Groq model name.`);
+      }
+    }
+    throw Errors.aiOutput(`AI service error: ${error.message}`);
+  }
+  throw Errors.aiOutput(`AI request failed: ${error instanceof Error ? error.message : "unknown error"}`);
+}
+
 export async function analyzeTextThreat(
   text: string,
   context: string = "general"
 ): Promise<ThreatAnalysisResult> {
   const client = getClient();
 
-  const response = await client.chat.completions.create({
-    model: "llama-3.3-70b-versatile",
-    messages: [
-      { role: "system", content: SYSTEM_PROMPT },
-      { role: "user", content: buildAnalysisPrompt(text, context) },
-    ],
-    temperature: 0.1,
-    max_tokens: 2048,
-    response_format: { type: "json_object" },
-  });
+  let response: Groq.Chat.ChatCompletion;
+  try {
+    response = await client.chat.completions.create({
+      model: AI_MODEL,
+      messages: [
+        { role: "system", content: SYSTEM_PROMPT },
+        { role: "user", content: buildAnalysisPrompt(text, context) },
+      ],
+      temperature: 0.1,
+      max_tokens: 2048,
+      response_format: { type: "json_object" },
+    });
+  } catch (error) {
+    wrapGroqError(error);
+  }
 
   const content = response.choices[0]?.message?.content;
   if (!content) {
@@ -117,6 +143,41 @@ export async function analyzeTextThreat(
     confidence: data.confidence,
     detectedLanguage: data.detectedLanguage,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Voice transcription via Groq Whisper
+// ---------------------------------------------------------------------------
+export async function transcribeAudio(audioFile: File): Promise<{
+  transcript: string;
+  duration: number | null;
+}> {
+  const client = getClient();
+
+  let transcription: { text: string; duration?: number };
+  try {
+    transcription = await client.audio.transcriptions.create({
+      file: audioFile,
+      model: "whisper-large-v3-turbo",
+      response_format: "verbose_json",
+    }) as unknown as { text: string; duration?: number };
+  } catch (error) {
+    wrapGroqError(error);
+  }
+
+  return {
+    transcript: transcription.text ?? "",
+    duration: transcription.duration ?? null,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Voice threat analysis (transcription + AI analysis)
+// ---------------------------------------------------------------------------
+export async function analyzeVoiceThreat(
+  transcript: string
+): Promise<ThreatAnalysisResult> {
+  return analyzeTextThreat(transcript, "voice");
 }
 
 export function isAIConfigured(): boolean {

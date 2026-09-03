@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { signupSchema } from "@/lib/validation";
 import { createClient, isSupabaseConfigured } from "@/lib/auth/server";
 import { createApiErrorResponse, Errors } from "@/lib/errors";
@@ -31,6 +32,30 @@ export async function POST(request: NextRequest) {
 
     if (error) {
       throw Errors.auth(error.message);
+    }
+
+    // Auto-confirm email so the user can log in immediately.
+    // Requires SUPABASE_SERVICE_ROLE_KEY in the environment.
+    if (data.user && process.env.SUPABASE_SERVICE_ROLE_KEY) {
+      const supabaseAdmin = createSupabaseClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.SUPABASE_SERVICE_ROLE_KEY,
+        { auth: { autoRefreshToken: false, persistSession: false } }
+      );
+      const { error: confirmError } = await supabaseAdmin.auth.admin.updateUserById(
+        data.user.id,
+        { email_confirm: true }
+      );
+      if (confirmError) {
+        console.error("[signup] Failed to auto-confirm email:", confirmError.message);
+        // Non-fatal — user was created but must confirm email manually
+      }
+    } else if (data.user && !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+      console.warn(
+        "[signup] SUPABASE_SERVICE_ROLE_KEY is not set. Email auto-confirmation is disabled. " +
+        "The user must confirm their email before logging in. " +
+        "To fix: add SUPABASE_SERVICE_ROLE_KEY to .env.local or disable email confirmation in the Supabase Dashboard."
+      );
     }
 
     return NextResponse.json({ user: data.user });
