@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { classifyRisk, computeRiskScore, getRiskLabel, getRiskBadgeClasses } from "@/lib/risk";
 import { validateUrl, analyzeUrlPatterns } from "@/lib/security";
 import { Errors, handleError } from "@/lib/errors";
+import { signupSchema } from "@/lib/validation";
 
 describe("Risk Engine", () => {
   it("classifies safe scores correctly", () => {
@@ -97,6 +98,39 @@ describe("URL Security", () => {
     const url = new URL("http://example.com");
     const { signals } = analyzeUrlPatterns(url);
     expect(signals.some((s) => s.name.includes("No HTTPS"))).toBe(true);
+  });
+});
+
+describe("Signup Schema", () => {
+  // Mirrors the payload sent by the signup form in src/app/[locale]/signup/page.tsx
+  const formPayload = {
+    fullName: "Test User",
+    email: "test@example.com",
+    password: "password123",
+    confirmPassword: "password123",
+    preferredLanguage: "en",
+  };
+
+  it("accepts the signup form payload including confirmPassword", () => {
+    const result = signupSchema.safeParse(formPayload);
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects a payload missing confirmPassword (regression guard)", () => {
+    // The exact payload shape that previously caused the
+    // "Invalid input: expected string, received undefined" Zod error
+    const payload = {
+      fullName: "Test User",
+      email: "test@example.com",
+      password: "password123",
+      preferredLanguage: "en",
+    };
+    const result = signupSchema.safeParse(payload);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const failedFields = result.error.issues.map((issue) => String(issue.path[0]));
+      expect(failedFields).toContain("confirmPassword");
+    }
   });
 });
 
